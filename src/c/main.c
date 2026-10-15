@@ -1788,7 +1788,7 @@ static void einst_zeigen(int sel_aktion) {
   if (W_NACH[s_nach]) snprintf(b, sizeof b, T("NACHKLINGELN: ALLE %d MIN >", "Nachklingeln: alle %d min >"), W_NACH[s_nach]);
   else snprintf(b, sizeof b, "%s", T("NACHKLINGELN: AUS >", "Nachklingeln: aus >"));
   eintrag(b, A_NACH, 0);
-  eintrag(T("SIGNAL TESTEN", "Signal testen"), A_TEST, 0);
+  eintrag(T("ALARM TESTEN", "Alarm testen"), A_TEST, 0);
   if (W_ZU[s_zu]) snprintf(b, sizeof b, T("NACH ABLAUF ZU: %d S >", "Nach Ablauf zu: %d s >"), W_ZU[s_zu]);
   else snprintf(b, sizeof b, "%s", T("NACH ABLAUF ZU: NIE >", "Nach Ablauf zu: nie >"));
   eintrag(b, A_ZU, 0);

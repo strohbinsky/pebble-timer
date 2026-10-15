@@ -5,7 +5,7 @@
 Timer und Stoppuhren für die **Pebble Time 2**. Wenn der Timer startet, springt ein Springer vom Brett. Er landet
 genau bei 0 im viel zu kleinen Planschbecken. Drei Punktrichter halten dabei die Restzeit hoch.
 
-> **Beta, Version 0.9.1.** Geprüft im Emulator, der Alltagstest auf der Uhr läuft noch.
+> **Beta, Version 0.9.2.** Geprüft im Emulator, der Alltagstest auf der Uhr läuft noch.
 
 ![Water](bilder/water-091.png)
 
