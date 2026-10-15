@@ -1,0 +1,74 @@
+{
+  "name": "timer",
+  "author": "Seb & Claude",
+  "version": "0.9.1",
+  "keywords": [
+    "pebble-app"
+  ],
+  "private": true,
+  "dependencies": {},
+  "pebble": {
+    "displayName": "Timer",
+    "uuid": "4b843446-e83b-40f7-9758-d4cb630933d6",
+    "sdkVersion": "3",
+    "targetPlatforms": [
+      "emery"
+    ],
+    "watchapp": {
+      "watchface": false
+    },
+    "messageKeys": [],
+    "resources": {
+      "media": [
+        {
+          "type": "bitmap",
+          "name": "SYMBOL",
+          "file": "images/symbol_timer.png",
+          "menuIcon": true
+        },
+        {
+          "type": "font",
+          "name": "ROBOTO_BOLD_92",
+          "file": "fonts/Ziffern-Roboto-Bold.ttf",
+          "characterRegex": "[0-9:'+-]"
+        },
+        {
+          "type": "font",
+          "name": "ROBOTO_BOLD_64",
+          "file": "fonts/Ziffern-Roboto-Bold.ttf",
+          "characterRegex": "[0-9:'+-]"
+        },
+        {
+          "type": "font",
+          "name": "ROBOTO_BOLD_50",
+          "file": "fonts/Ziffern-Roboto-Bold.ttf",
+          "characterRegex": "[0-9:'+-]"
+        },
+        {
+          "type": "font",
+          "name": "ROBOTO_BOLD_36",
+          "file": "fonts/Ziffern-Roboto-Bold.ttf",
+          "characterRegex": "[0-9:'+-]"
+        },
+        {
+          "type": "font",
+          "name": "FREDOKA_15",
+          "file": "fonts/Fredoka-SemiBold.ttf",
+          "characterRegex": "[ -~äöüÄÖÜß·]"
+        },
+        {
+          "type": "font",
+          "name": "FREDOKA_18",
+          "file": "fonts/Fredoka-SemiBold.ttf",
+          "characterRegex": "[ -~äöüÄÖÜß·]"
+        },
+        {
+          "type": "font",
+          "name": "FREDOKA_BOLD_26",
+          "file": "fonts/Fredoka-Bold.ttf",
+          "characterRegex": "[0-9:+-]"
+        }
+      ]
+    }
+  }
+}
