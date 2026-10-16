@@ -1,7 +1,7 @@
 {
   "name": "timer",
   "author": "Seb & Claude",
-  "version": "0.9.2",
+  "version": "0.11.0",
   "keywords": [
     "pebble-app"
   ],
@@ -67,6 +67,86 @@
           "name": "FREDOKA_BOLD_26",
           "file": "fonts/Fredoka-Bold.ttf",
           "characterRegex": "[0-9:+-]"
+        },
+        {
+          "type": "bitmap",
+          "name": "FS_STEH",
+          "file": "images/fallschirm/steh.png"
+        },
+        {
+          "type": "bitmap",
+          "name": "FS_HOCKE",
+          "file": "images/fallschirm/hocke.png"
+        },
+        {
+          "type": "bitmap",
+          "name": "FS_FLUG",
+          "file": "images/fallschirm/flug.png"
+        },
+        {
+          "type": "bitmap",
+          "name": "FS_SEITE",
+          "file": "images/fallschirm/seite.png"
+        },
+        {
+          "type": "bitmap",
+          "name": "FS_HAENG",
+          "file": "images/fallschirm/haeng.png"
+        },
+        {
+          "type": "bitmap",
+          "name": "FS_WINK",
+          "file": "images/fallschirm/wink.png"
+        },
+        {
+          "type": "bitmap",
+          "name": "FS_ZIEH",
+          "file": "images/fallschirm/zieh.png"
+        },
+        {
+          "type": "bitmap",
+          "name": "FS_UHR",
+          "file": "images/fallschirm/uhr.png"
+        },
+        {
+          "type": "bitmap",
+          "name": "FS_KLEIN",
+          "file": "images/fallschirm/klein.png"
+        },
+        {
+          "type": "bitmap",
+          "name": "FS_FLUGZEUG",
+          "file": "images/fallschirm/flugzeug.png"
+        },
+        {
+          "type": "bitmap",
+          "name": "FS_GESICHT",
+          "file": "images/fallschirm/gesicht.png"
+        },
+        {
+          "type": "bitmap",
+          "name": "FS_VOGEL_A",
+          "file": "images/fallschirm/vogel_a.png"
+        },
+        {
+          "type": "bitmap",
+          "name": "FS_VOGEL_B",
+          "file": "images/fallschirm/vogel_b.png"
+        },
+        {
+          "type": "bitmap",
+          "name": "FS_TAUBE",
+          "file": "images/fallschirm/taube.png"
+        },
+        {
+          "type": "bitmap",
+          "name": "FS_ENTE",
+          "file": "images/fallschirm/ente.png"
+        },
+        {
+          "type": "bitmap",
+          "name": "FS_JUMBO",
+          "file": "images/fallschirm/jumbo.png"
         }
       ]
     }

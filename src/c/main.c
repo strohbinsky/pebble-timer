@@ -1,5 +1,6 @@
-// Timer 0.9 — Timer und Stoppuhren für die Pebble Time 2, Bedienung und Aussehen wie Simzeit und Linie 8.
-// Ansichten: Water (Standard seit 0.9.1: Sprungbrett, Springer, Punktrichter, Planschbecken), Papier, Phosphor.
+// Timer 0.11 — Timer und Stoppuhren für die Pebble Time 2, Bedienung und Aussehen wie Simzeit und Linie 8.
+// Ansichten: Fallschirm (Standard seit 0.11: Doppeldecker, Freifall, Planschbecken), Water (Sprungbrett, Springer,
+// Punktrichter, Planschbecken), Papier, Phosphor.
 // Läuft beim Schließen etwas, öffnet die App wieder in der letzten Ansicht (Timer bzw. Stoppuhr).
 // Startliste: NEUER TIMER · NEUE STOPPUHR · laufende Timer und Stoppuhren · gespeicherte Timer (nach Dauer).
 // Bis zu 5 Timer und 5 Stoppuhren gleichzeitig, 10 gespeicherte Timer. Alles läuft bei geschlossener App weiter;
@@ -9,6 +10,7 @@
 // Ablauf: Ton und Vibration (Dauer einstellbar), danach Nachklingeln; jede Taste stellt ab.
 #include <pebble.h>
 #include "led_font.h"
+#include "fallschirm_bilder.h"
 
 #define BREITE 200
 #define HOEHE 228
@@ -42,9 +44,9 @@
 #define ZEILE 22                      // Listen: Zeilenhöhe
 #define LZEILEN 8                     // Listen: sichtbare Zeilen ohne Infozeilen
 
-// Papier (Standard): Systemschrift fett, Ziffern Roboto. Phosphor: Pixelschrift, weiß. Klar (1) bis 0.6 → Papier.
-// Water (0.9.0, Standard seit 0.9.1): Fredoka, Eisblau, Springer und Punktrichter
-enum { L_PHOSPHOR = 0, L_PAPIER = 2, L_WATER = 3 };
+// Papier: Systemschrift fett, Ziffern Roboto. Phosphor: Pixelschrift, weiß. Klar (1) bis 0.6 → Papier.
+// Water (0.9.0, Standard 0.9.1–0.10): Fredoka, Eisblau, Springer und Punktrichter. Fallschirm (0.10.0) wie Water
+enum { L_PHOSPHOR = 0, L_PAPIER = 2, L_WATER = 3, L_FALL = 4 };
 enum { M_LISTE, M_EIN, M_TIMER, M_STOPP, M_ANPASSEN, M_FRAGE };
 enum { Z_FREI = 0, Z_BEREIT, Z_LAEUFT, Z_PAUSE, Z_UM };   // Zustand von Timer und Stoppuhr (Z_UM nur Timer)
 enum { PK_FORMAT = 1, PK_LAYOUT, PK_TON, PK_LAUT, PK_VIB, PK_KLINGEL, PK_NACH, PK_RUHE, PK_LETZTE, PK_GESP, PK_TIMER,
@@ -75,7 +77,7 @@ enum { FL_NEU, FL_G_NEU, FL_G_AENDERN, FL_T_SPEICHERN };
 static Window *s_win;
 static Layer *s_layer;
 // Einstellungen
-static int s_layout = L_WATER;
+static int s_layout = L_FALL;
 static bool s_invers, s_kontrast;     // Farben getauscht; hoher Kontrast (Phosphor: keine graue Schrift)
 typedef struct { GColor hg, tinte, k_linie, k_orange, cyan, rot, p_text, p_grau, p_gitter, p_hell, p_warn; } Palette;
 static Palette s_pal;
@@ -112,7 +114,8 @@ static int16_t s_lwert[LMAX];
 static GFont s_f14, s_f18, s_f18b, s_f24b, s_f28b, s_leco[4];
 
 #define PAPIER (s_layout == L_PAPIER)
-#define WATER (s_layout == L_WATER)
+#define WATER (s_layout == L_WATER || s_layout == L_FALL)   // Fallschirm: Listen, Menüs, Eingabe wie Water
+#define FALL (s_layout == L_FALL)
 #define KLAR (PAPIER || WATER)        // Aufbau mit Textschrift, Texte gemischt geschrieben (bis 0.6 auch Ansicht Klar)
 #define T(p, k) (KLAR ? (k) : (p))
 #define C_NORMAL (KLAR ? K_TEXT : P_TEXT)
@@ -1274,18 +1277,665 @@ static void w_gameboy(GContext *ctx, time_t now) {
   P_KLEIN_M("TASTE: AUS", 128, dunkel);
 }
 
+
+// ---------- Ansicht Fallschirm ----------
+// Springer im Family-Guy-Stil mit Lederhaube und Fliegerbrille. Bereit: steht auf dem Flügel eines Doppeldeckers,
+// die Zeit steht auf dem Rumpf. Start: Absprung, die Kamera fällt mit, das Höhenband (Restzeit statt Höhe) fliegt
+// ein. Freifall: alle 5 s eine andere Sicht (Seite, Blick nach unten, frontal, ab 10 min vor Ende der Anflug);
+// ohne Taste nur der Blick nach unten, Bild alle 10 s, die Uhr am Handgelenk jede Sekunde. 1 min vor Ende öffnet
+// der Schirm, 3 s vor Ende wirft er ihn ab und taucht bei 0:00 ins Planschbecken. Zeit um: Game Boy, COURSE CLEAR.
+// Kurze Timer: Absprung höchstens die halbe Zeit, Schirm ab 45 % der Restzeit, mindestens 5,5 s vor Ende.
+// Figuren, Flugzeug und Tiere sind Bilder aus dem Entwurf (tools/fallschirm_bilder.py), der Rest wird gezeichnet.
+#define F_HIMMEL   GColorFromHEX(0x55AAFF)
+#define F_HIMMEL_L GColorFromHEX(0xAAFFFF)
+#define F_GRAU     GColorFromHEX(0xAAAAAA)
+#define F_GRAU_D   GColorFromHEX(0x555555)
+#define F_ORANGE   GColorFromHEX(0xFF5500)
+#define F_LEDER    GColorFromHEX(0xAA5500)
+#define F_LEDER_D  GColorFromHEX(0x550000)
+#define F_GELB     GColorFromHEX(0xFFFF00)
+#define F_ROT      GColorFromHEX(0xFF0000)
+#define F_RASEN    GColorFromHEX(0x55AA00)
+#define F_RASEN_D  GColorFromHEX(0x005500)
+#define A_PI (TRIG_MAX_ANGLE / 2)
+enum { FS_FLUGZEUG, FS_SEITE, FS_POV, FS_FRONTAL, FS_ANFLUG, FS_SCHIRM, FS_ENDE, FS_PAUSE };
+
+static GBitmap *s_fb[FB_N];
+static int s_fszene = -1;
+static void f_frei(void) {
+  for (int i = 0; i < FB_N; i++) if (s_fb[i]) { gbitmap_destroy(s_fb[i]); s_fb[i] = NULL; }
+  s_fszene = -1;
+}
+// Bild so setzen, dass sein Anker auf (x, y) liegt, gedreht um a
+static void f_bild(GContext *ctx, int i, int x, int y, int32_t a) {
+  if (!s_fb[i]) s_fb[i] = gbitmap_create_with_resource(FB_RES[i]);
+  if (!s_fb[i]) return;
+  graphics_context_set_compositing_mode(ctx, GCompOpSet);
+  if (WN(a) == 0) {
+    const GSize g = gbitmap_get_bounds(s_fb[i]).size;
+    graphics_draw_bitmap_in_rect(ctx, s_fb[i], GRect(x - FB_ANKER[i][0], y - FB_ANKER[i][1], g.w, g.h));
+  } else graphics_draw_rotated_bitmap(ctx, s_fb[i], GPoint(FB_ANKER[i][0], FB_ANKER[i][1]), WN(a), GPoint(x, y));
+  graphics_context_set_compositing_mode(ctx, GCompOpAssign);
+}
+static int32_t f_ein(int32_t x, int32_t a, int32_t b) { return x <= a ? 0 : x >= b ? 1000 : (x - a) * 1000 / (b - a); }
+static int32_t f_weich(int32_t x, int32_t a, int32_t b) { return w_ease(f_ein(x, a, b)); }
+static void f_linie(GContext *ctx, int x0, int y0, int x1, int y1, int w, GColor c) {
+  graphics_context_set_stroke_color(ctx, c);
+  graphics_context_set_stroke_width(ctx, w);
+  graphics_draw_line(ctx, GPoint(x0, y0), GPoint(x1, y1));
+}
+static void f_kapsel(GContext *ctx, int x0, int y0, int x1, int y1, int w, GColor c) {
+  f_linie(ctx, x0, y0, x1, y1, w + 2, GColorBlack);
+  f_linie(ctx, x0, y0, x1, y1, w, c);
+}
+// Punkt (lx, ly) im Körper (Ursprung Hüfte, k in Promille), um a gedreht
+static GPoint f_dreh(int x, int y, int32_t a, int lx, int ly, int k) {
+  const int32_t ca = cos_lookup(WN(a)), sa = sin_lookup(WN(a));
+  return GPoint(x + (lx * ca - ly * sa) / TRIG_MAX_RATIO * k / 1000, y + (lx * sa + ly * ca) / TRIG_MAX_RATIO * k / 1000);
+}
+static void f_ell(GContext *ctx, int cx, int cy, int rx, int ry, GColor fuell, GColor rand, int w) {
+  GPoint p[24];
+  for (int i = 0; i < 24; i++) {
+    const int32_t a = i * TRIG_MAX_ANGLE / 24;
+    p[i] = GPoint(cx + rx * cos_lookup(a) / TRIG_MAX_RATIO, cy + ry * sin_lookup(a) / TRIG_MAX_RATIO);
+  }
+  GPath g = { .num_points = 24, .points = p };
+  if (!gcolor_equal(fuell, GColorClear)) { graphics_context_set_fill_color(ctx, fuell); gpath_draw_filled(ctx, &g); }
+  if (w) { graphics_context_set_stroke_color(ctx, rand); graphics_context_set_stroke_width(ctx, w); gpath_draw_outline(ctx, &g); }
+}
+static const int8_t F_WOLKE[5][3] = { { -14, 2, 9 }, { -4, -5, 12 }, { 9, -2, 10 }, { 18, 4, 7 }, { 2, 5, 9 } };
+static void f_wolke(GContext *ctx, int x, int y, int s) {   // s: Größe in Promille
+  for (int r = 1; r >= 0; r--) {
+    graphics_context_set_fill_color(ctx, r ? F_GRAU : GColorWhite);
+    for (int i = 0; i < 5; i++)
+      graphics_fill_circle(ctx, GPoint(x + F_WOLKE[i][0] * s / 1000, y + F_WOLKE[i][1] * s / 1000), F_WOLKE[i][2] * s / 1000 + r);
+  }
+}
+static uint32_t f_zufall(uint32_t n) { n = n * 2654435761u + 0x9E3779B9u; n ^= n >> 15; n *= 2246822519u; return n ^ (n >> 13); }
+// Fahrtwindlinien, laufen mit v px/s nach oben (quer: nach links)
+static void f_linien(GContext *ctx, int32_t t, uint32_t seed, int n, int v, bool quer, GColor c, int x1) {
+  const int32_t weg = t / 100 * v / 10;
+  for (int i = 0; i < n; i++) {
+    const uint32_t z = f_zufall(seed * 97 + i);
+    const int l = 10 + z % 24, w = (z >> 8) % 3 == 2 ? 3 : 1;
+    if (quer) {
+      const int x = ((int)((z >> 4) % 260) + 260 - (int)(weg % 260)) % 260 - 30, y = (z >> 12) % HOEHE;
+      f_linie(ctx, x, y, x + l, y, w, c);
+    } else {
+      const int x = (z >> 4) % x1, y = ((int)((z >> 12) % 288) + 288 - (int)(weg % 288)) % 288 - 30;
+      f_linie(ctx, x, y, x, y + l, w, c);
+    }
+  }
+}
+// Text mittig in r, mit Rand
+static void f_text_rand(GContext *ctx, const char *t, GFont f, GRect r, GColor c, GColor rand) {
+  for (int i = 0; i < 9; i++)
+    if (i != 4) k_text(ctx, t, f, GRect(r.origin.x + (i % 3 - 1) * 2, r.origin.y + (i / 3 - 1) * 2, r.size.w, r.size.h), GTextAlignmentCenter, rand);
+  k_text(ctx, t, f, r, GTextAlignmentCenter, c);
+}
+static void f_hg(GContext *ctx, GColor c) { fuellen(ctx, GRect(0, 0, BREITE, HOEHE), c); }
+static void f_rest(char *b, size_t n, int32_t rest_ms) { dauer_text(b, n, (rest_ms + 999) / 1000); }
+
+// Höhenband wie im Cockpit, Restzeit statt Höhe: 1 min = 44 px, im Fallen läuft es nach oben. dx: fliegt von rechts ein
+static void f_band(GContext *ctx, int32_t rest_ms, int dx) {
+  const int x0 = 146 + dx, cy = 118, bx = 120 + dx;
+  char b[12];
+  if (x0 >= BREITE) return;
+  fuellen(ctx, GRect(x0, 0, BREITE - x0, HOEHE), F_GRAU_D);
+  f_linie(ctx, x0, 0, x0, HOEHE, 1, GColorBlack);
+  const int32_t rs = rest_ms / 1000, max = s_t[s_akt].gesamt;
+  for (int32_t v = (rs - 180) / 15; v <= (rs + 180) / 15; v++) {
+    const int32_t sek = v * 15;
+    if (sek < 0 || sek > max + 59) continue;
+    const int y = cy + (rest_ms - sek * 1000) * 44 / 60000;
+    if (y < -10 || y > HOEHE + 10) continue;
+    f_linie(ctx, x0, y, x0 + (sek % 60 ? 5 : 10), y, 1, GColorWhite);
+    if (sek % 60 == 0 && (y < cy - 30 || y > cy + 30) && y > 40) {
+      snprintf(b, sizeof b, "%d", (int)(sek / 60));
+      k_text(ctx, b, s_wf15, GRect(x0 + 13, y + 5 - 15, 40, 20), GTextAlignmentLeft, GColorWhite);
+    }
+  }
+  GPoint p[5] = { GPoint(bx, cy - 20), GPoint(BREITE + 2, cy - 20), GPoint(BREITE + 2, cy + 20), GPoint(bx, cy + 20), GPoint(bx - 8, cy) };
+  w_poly(ctx, p, 5, GColorBlack, GColorWhite);
+  f_rest(b, sizeof b, rest_ms);
+  const GFont f = k_breite(b, s_wf26) <= BREITE - bx - 2 ? s_wf26 : s_wf18;
+  k_text(ctx, b, f, GRect(bx - 2, cy + (f == s_wf26 ? 9 - 26 : 6 - 18), BREITE - bx + 4 + dx, 32), GTextAlignmentCenter, GColorWhite);
+  k_text(ctx, "REST", s_wf15, GRect(x0 + 5, 222 - 15, 50, 20), GTextAlignmentLeft, GColorWhite);
+}
+
+// Planschbecken: Wasser hinten, vorn Rand mit rosa-weißen Streifen
+static void f_becken(GContext *ctx, int cx, int cy, int rx, int ry, int h, bool hinten, bool vorn) {
+  if (hinten) f_ell(ctx, cx, cy, rx, ry, W_WASSER, W_WASSER_D, 1);
+  if (!vorn) return;
+  GPoint o[13];
+  for (int i = 0; i <= 12; i++) {
+    const int32_t a = i * A_PI / 12;
+    o[i] = GPoint(cx + rx * cos_lookup(a) / TRIG_MAX_RATIO, cy + ry * sin_lookup(a) / TRIG_MAX_RATIO);
+  }
+  for (int i = 0; i < 12; i++) {
+    GPoint q[4] = { o[i], o[i + 1], GPoint(o[i + 1].x, o[i + 1].y + h), GPoint(o[i].x, o[i].y + h) };
+    GPath g = { .num_points = 4, .points = q };
+    graphics_context_set_fill_color(ctx, i % 2 ? GColorWhite : W_ROSA);
+    gpath_draw_filled(ctx, &g);
+  }
+  for (int i = 0; i < 12; i++) {
+    f_linie(ctx, o[i].x, o[i].y, o[i + 1].x, o[i + 1].y, 1, GColorBlack);
+    f_linie(ctx, o[i].x, o[i].y + h, o[i + 1].x, o[i + 1].y + h, 1, GColorBlack);
+  }
+  f_linie(ctx, o[0].x, o[0].y, o[0].x, o[0].y + h, 1, GColorBlack);
+  f_linie(ctx, o[12].x, o[12].y, o[12].x, o[12].y + h, 1, GColorBlack);
+}
+
+// Rundkappe von der Seite; auf in Promille (unter 1000: noch nicht ganz offen). rand: 9 Randpunkte
+static void f_kappe(GContext *ctx, int kx, int ky, int rx, int ry, int32_t auf, GPoint *rand) {
+  const int rxe = rx * (120 + 880 * auf / 1000) / 1000, rye = ry * (550 + 450 * (auf > 1100 ? 1100 : auf) / 1000) / 1000;
+  const int welle = 6 * (auf > 1000 ? 1000 : auf) / 1000;
+  for (int i = 0; i < 8; i++) {
+    GPoint p[19];
+    for (int s = 0; s < 2; s++) {
+      const int xi = kx - rxe + 2 * rxe * (i + s) / 8;
+      for (int j = 0; j <= 6; j++) {
+        const int32_t u = j * TRIG_MAX_ANGLE / 24;
+        p[s ? 18 - j : j] = GPoint(kx + (xi - kx) * sin_lookup(u) / TRIG_MAX_RATIO, ky - rye * cos_lookup(u) / TRIG_MAX_RATIO);
+      }
+    }
+    for (int j = 1; j <= 5; j++)
+      p[6 + j] = GPoint(p[6].x + (p[12].x - p[6].x) * j / 6, ky + welle * sin_lookup(j * A_PI / 6) / TRIG_MAX_RATIO);
+    w_poly(ctx, p, 19, i % 2 ? GColorWhite : W_ROSA, GColorBlack);
+    rand[i] = GPoint(p[6].x, ky);
+    if (i == 7) rand[8] = GPoint(p[12].x, ky);
+  }
+}
+// Fangleinen vom Kappenrand zum Verbindungsglied über den Schultern, von dort Tragegurte zum Gurtzeug
+static void f_leinen(GContext *ctx, const GPoint *rand, int kx, int ky, GPoint s0, GPoint s1) {
+  const int mx = (s0.x + s1.x) / 2, my = (s0.y + s1.y) / 2, x = mx + (kx - mx) * 35 / 100, y = my + (ky - my) * 35 / 100;
+  for (int i = 0; i < 9; i++) f_linie(ctx, rand[i].x, rand[i].y, x, y, 1, F_GRAU_D);
+  f_linie(ctx, x, y, s0.x, s0.y, 3, GColorFromHEX(0x555500));
+  f_linie(ctx, x, y, s1.x, s1.y, 3, GColorFromHEX(0x555500));
+}
+static void f_schultern(int x, int y, int32_t a, GPoint *s0, GPoint *s1) {
+  *s0 = f_dreh(x, y, a, -1, -20, 1050);
+  *s1 = f_dreh(x, y, a, 2, -20, 1050);
+}
+
+// Bereit und Absprung. ts < 0: bereit; sonst ms seit dem Start
+static const int16_t F_WOLKEN_FZ[6][3] = { { 60, 50, 1100 }, { 190, 86, 800 }, { 130, 30, 600 }, { 20, 104, 700 }, { 90, 300, 1000 }, { 170, 420, 800 } };
+static void f_flugzeug(GContext *ctx, int32_t uhr, int32_t ts, int32_t rest_ms) {
+  const int hx = 118, hy0 = 82;
+  char b[12];
+  int x = hx, y = hy0, cam = 0;
+  int32_t a = 0, u = ts - 350;
+  if (u >= 0) {
+    x = hx + w_sin(14, (u > 600 ? 600 : u) * A_PI / 600) - 80 * f_weich(u, 0, 1800) / 1000;
+    y = hy0 + 6 - 34 * u / 1000 + 120 * (u / 10) * (u / 10) / 10000;
+    cam = y > 104 ? y - 104 : 0;
+    a = RAD(2.75) * f_weich(u, 0, 900) / 1000;
+  }
+  f_hg(ctx, F_HIMMEL);
+  for (int i = 0; i < 6; i++) {
+    const int yy = F_WOLKEN_FZ[i][1] - cam * 6 / 10;
+    if (yy > -30 && yy < HOEHE + 30) f_wolke(ctx, (F_WOLKEN_FZ[i][0] + 560 - (int)(uhr / 100 * 55 / 10 % 280)) % 280 - 40, yy, F_WOLKEN_FZ[i][2]);
+  }
+  f_linien(ctx, uhr, 3, 12, 260, true, GColorWhite, BREITE);
+  if (cam > 4) f_linien(ctx, uhr, 9, cam / 6 > 16 ? 16 : cam / 6, 300, false, GColorWhite, 140);
+  const int oy = w_sin(2, w_winkel(uhr, 31290)) - cam;
+  if (oy > -240) {
+    f_bild(ctx, FB_FLUGZEUG, 0, oy, 0);
+    const int lp = w_sin(30, w_winkel(uhr, 323330) + TRIG_MAX_ANGLE / 4);
+    f_linie(ctx, 201, 165 - lp + oy, 201, 165 + lp + oy, 5, F_GRAU_D);
+    w_kreis(ctx, GPoint(201, 165 + oy), 5, F_GRAU, GColorBlack);
+    f_rest(b, sizeof b, rest_ms);
+    f_text_rand(ctx, b, s_wf26, GRect(20, 164 + oy + 9 - 26, 120, 32), GColorWhite, W_NAVY);
+  }
+  const int hy = hy0 + oy + cam;
+  if (ts < 0) {
+    f_bild(ctx, FB_STEH, hx, hy, 0);
+    w_schild(ctx, "Start");
+  } else if (u < 0) f_bild(ctx, FB_HOCKE, hx, hy + 6 * ts / 350, 0);
+  else {
+    if (u < 600)                              // Staubwölkchen vom Absprung
+      for (int i = 0; i < 3; i++) w_kreis(ctx, GPoint(hx - 8 + 11 * i - 20 * u / 1000, 104 + oy - 4 * u * i / 1000), 2 + 8 * u / 1000, GColorWhite, F_GRAU);
+    const int fy = y - cam + w_sin(2, w_winkel(uhr, 31290));
+    f_bild(ctx, FB_FLUG, x, fy, a);
+    if (u < 1600) {                           // Sprechblase, Zipfel zum Kopf
+      const GPoint k = f_dreh(x, fy, a, 14, -30, 1150);
+      const int tw = k_breite("GERONIMOOO!", s_wf15), x1 = 6 + tw + 22, sx = k.x - 7 < 20 ? 20 : k.x - 7 > x1 - 28 ? x1 - 28 : k.x - 7;
+      const int ky = k.y - 12 < 52 ? 52 : k.y - 12;
+      w_pille(ctx, 6, 8, tw + 22, 29, GColorWhite);
+      GPoint z[3] = { GPoint(sx, 35), GPoint(k.x < 30 ? 30 : k.x > 140 ? 140 : k.x, ky), GPoint(sx + 14, 35) };
+      w_poly(ctx, z, 3, GColorWhite, GColorBlack);
+      graphics_context_set_stroke_color(ctx, GColorBlack);
+      graphics_context_set_stroke_width(ctx, 1);
+      graphics_draw_round_rect(ctx, GRect(6, 8, tw + 22, 29), 8);
+      fuellen(ctx, GRect(sx + 1, 34, 13, 3), GColorWhite);
+      k_text(ctx, "GERONIMOOO!", s_wf15, GRect(17, 28 - 15, tw + 4, 20), GTextAlignmentLeft, W_NAVY);
+    }
+    if (cam > 120) f_band(ctx, rest_ms, (1000 - f_weich(cam, 120, 210)) / 10);
+  }
+}
+
+static void f_seite(GContext *ctx, int32_t t, int32_t rest_ms) {
+  f_hg(ctx, F_HIMMEL);
+  f_linien(ctx, t, 7, 22, 300, false, GColorWhite, 140);
+  f_wolke(ctx, 30, HOEHE + 50 - (int)((t / 10 * 14 / 100 + 40) % 420), 1300);
+  f_wolke(ctx, 104, HOEHE + 50 - (int)((t / 10 * 14 / 100 + 250) % 420), 800);
+  f_bild(ctx, FB_JUMBO, 96, 70 - (int)(t % 20000 * 18 / 1000), 0);
+  for (int i = 0; i < 2; i++) {               // Vögel kommen von unten, erschrocken
+    const int x = i ? 34 : 118, y = HOEHE + 30 - (int)((t + 4500 * 100 - (i ? 3000 : 800)) % 4500 * 170 / 1000);
+    if (y < -30 || y > HOEHE + 30) continue;
+    f_bild(ctx, (t / 60) % 2 ? FB_VOGEL_A : FB_VOGEL_B, x, y, 0);
+    for (int k = -1; k <= 1; k++) f_linie(ctx, x + 6 * k, y + 10, x + 6 * k, y + 24, 1, GColorWhite);
+    k_text(ctx, "!", s_wf15, GRect(x + 8, y - 10 - 15, 10, 20), GTextAlignmentLeft, F_ROT);
+  }
+  f_bild(ctx, FB_SEITE, 66, 82 + w_sin(2, w_winkel(t, 31290)), 0);
+  f_band(ctx, rest_ms, 0);
+}
+
+// Blick nach unten: kleine Erde, Hände voraus, große Uhr am linken Handgelenk, Höhenmesser rechts
+static const int8_t F_STERNE[8][2] = { { 14, 14 }, { 60, 30 }, { 170, 20 }, { 130, 8 }, { 190, 60 }, { 8, 70 }, { 40, 110 }, { 176, 118 } };
+static const int8_t F_LAND[3][7][2] = { { { -18, -18 }, { -4, -24 }, { 4, -14 }, { -2, -2 }, { -14, 0 }, { -22, -8 }, { -22, -8 } },
+                                        { { 6, 2 }, { 18, -4 }, { 24, 8 }, { 14, 22 }, { 4, 16 }, { 4, 16 }, { 4, 16 } },
+                                        { { -22, 10 }, { -12, 8 }, { -10, 18 }, { -18, 20 }, { -18, 20 }, { -18, 20 }, { -18, 20 } } };
+static const int16_t F_ARM[2][4][2] = { { { -50, 250 }, { 64, 250 }, { 90, 122 }, { 66, 122 } }, { { 136, 250 }, { 250, 250 }, { 134, 122 }, { 110, 122 } } };
+static const int16_t F_BAND_UHR[2][4][2] = { { { 81, 213 }, { 97, 225 }, { 116, 201 }, { 101, 188 } }, { { 15, 160 }, { 0, 147 }, { 19, 123 }, { 35, 135 } } };
+static void f_pov(GContext *ctx, int32_t t, int32_t rest_ms, int32_t prog) {
+  char b[12];
+  f_hg(ctx, W_WASSER_D);
+  graphics_context_set_fill_color(ctx, GColorWhite);
+  for (int i = 0; i < 8; i++) graphics_fill_circle(ctx, GPoint(F_STERNE[i][0] + 10, F_STERNE[i][1]), 1);
+  const int ex = 100, ey = 58, er = 20 + 16 * prog / 1000 + t % 60000 / 2500;
+  w_kreis(ctx, GPoint(ex, ey), er + 3, F_HIMMEL_L, F_HIMMEL_L);
+  w_kreis(ctx, GPoint(ex, ey), er, GColorFromHEX(0x0055FF), W_NAVY);
+  for (int k = 0; k < 3; k++) {
+    GPoint p[7];
+    for (int j = 0; j < 7; j++) p[j] = GPoint(ex + F_LAND[k][j][0] * er / 30, ey + F_LAND[k][j][1] * er / 30);
+    w_poly(ctx, p, 7, F_RASEN, F_RASEN);
+  }
+  w_kreis(ctx, GPoint(ex - 2 * er / 30, ey - 9 * er / 30), 1, W_ROSA, W_ROSA);
+  for (int i = 0; i < 5; i++) {               // Wolkenfetzen fliegen nach außen
+    const int32_t u = (t / 10 * 45 / 100 + i * 200) % 1000, w = DEG_TO_TRIGANGLE(30 + i * 73), rr = er + 6 + u * 120 / 1000;
+    f_wolke(ctx, ex + rr * cos_lookup(w) / TRIG_MAX_RATIO, ey + rr * sin_lookup(w) / TRIG_MAX_RATIO, 150 + 600 * u / 1000);
+  }
+  for (int i = 0; i < 18; i++) {
+    const int32_t w = i * TRIG_MAX_ANGLE / 18 + RAD(0.2), r0 = er + 14 + (i * 23 + t / 10 * 16 / 100) % 110;
+    const int32_t c = cos_lookup(w), s = sin_lookup(w);
+    f_linie(ctx, ex + r0 * c / TRIG_MAX_RATIO, ey + r0 * s / TRIG_MAX_RATIO, ex + (r0 + 14) * c / TRIG_MAX_RATIO, ey + (r0 + 14) * s / TRIG_MAX_RATIO, 1, GColorWhite);
+  }
+  for (int k = 0; k < 2; k++) {               // Arme, Handschuhe voraus
+    GPoint p[4];
+    for (int j = 0; j < 4; j++) p[j] = GPoint(F_ARM[k][j][0], F_ARM[k][j][1]);
+    w_poly(ctx, p, 4, F_ORANGE, F_ORANGE);
+    const int hx = k ? 122 : 78, hy = 108, g = k ? -1 : 1;
+    f_ell(ctx, hx + g * 12, hy + 2, 6, 8, F_LEDER, GColorBlack, 1);
+    graphics_context_set_fill_color(ctx, F_LEDER);
+    graphics_fill_rect(ctx, GRect(hx - 12, hy - 26, 25, 38), 8, GCornersAll);
+    graphics_context_set_stroke_color(ctx, GColorBlack);
+    graphics_context_set_stroke_width(ctx, 1);
+    graphics_draw_round_rect(ctx, GRect(hx - 12, hy - 26, 25, 38), 8);
+    for (int j = -1; j <= 1; j++) f_linie(ctx, hx + 6 * j, hy - 24, hx + 6 * j, hy - 12, 1, F_LEDER_D);
+    f_linie(ctx, hx - 12, hy + 8, hx + 12, hy + 8, 3, F_LEDER_D);
+  }
+  const GPoint am = GPoint(162, 188);         // Höhenmesser, Zeiger sinkt mit
+  w_kreis(ctx, am, 22, GColorWhite, GColorBlack);
+  for (int i = 0; i < 10; i++) {
+    const int32_t w = i * TRIG_MAX_ANGLE / 10;
+    f_linie(ctx, am.x + 16 * sin_lookup(w) / TRIG_MAX_RATIO, am.y - 16 * cos_lookup(w) / TRIG_MAX_RATIO,
+            am.x + 20 * sin_lookup(w) / TRIG_MAX_RATIO, am.y - 20 * cos_lookup(w) / TRIG_MAX_RATIO, 1, GColorBlack);
+  }
+  const int32_t ges = s_t[s_akt].gesamt > 0 ? s_t[s_akt].gesamt : 1, wa = (int32_t)((int64_t)rest_ms * TRIG_MAX_ANGLE / (ges * 1000));
+  f_linie(ctx, am.x, am.y, am.x + 14 * sin_lookup(wa) / TRIG_MAX_RATIO, am.y - 14 * cos_lookup(wa) / TRIG_MAX_RATIO, 3, F_ROT);
+  k_text(ctx, "ALT", fonts_get_system_font(FONT_KEY_GOTHIC_14_BOLD), GRect(am.x - 10, am.y + 4, 20, 16), GTextAlignmentCenter, GColorBlack);
+  // Uhr am linken Handgelenk: Restzeit, gelber Ring = Restsekunden der Minute, roter Zeiger läuft rückwärts
+  const GPoint m = GPoint(58, 174);
+  const int r = 48;
+  for (int k = 0; k < 2; k++) {
+    GPoint p[4];
+    for (int j = 0; j < 4; j++) p[j] = GPoint(F_BAND_UHR[k][j][0], F_BAND_UHR[k][j][1]);
+    w_poly(ctx, p, 4, F_LEDER_D, F_LEDER_D);
+  }
+  w_kreis(ctx, m, r + 5, F_GRAU, GColorBlack);
+  w_kreis(ctx, m, r, W_NAVY, W_NAVY);
+  const int32_t sek = rest_ms % 60000;
+  for (int i = 0; i < 60; i++) {
+    const int32_t w = i * TRIG_MAX_ANGLE / 60, ri = r - (i % 5 ? 4 : 7);
+    f_linie(ctx, m.x + ri * sin_lookup(w) / TRIG_MAX_RATIO, m.y - ri * cos_lookup(w) / TRIG_MAX_RATIO,
+            m.x + (r - 1) * sin_lookup(w) / TRIG_MAX_RATIO, m.y - (r - 1) * cos_lookup(w) / TRIG_MAX_RATIO, 1, i * 1000 < sek ? F_GRAU : F_GRAU_D);
+  }
+  const int32_t wz = sek * (TRIG_MAX_ANGLE / 1000) / 60;
+  graphics_context_set_fill_color(ctx, F_GELB);
+  if (wz > 0) graphics_fill_radial(ctx, GRect(m.x - r + 10, m.y - r + 10, 2 * (r - 10) + 1, 2 * (r - 10) + 1), GOvalScaleModeFitCircle, 4, 0, wz);
+  f_linie(ctx, m.x + (r - 20) * sin_lookup(wz) / TRIG_MAX_RATIO, m.y - (r - 20) * cos_lookup(wz) / TRIG_MAX_RATIO,
+          m.x + (r - 2) * sin_lookup(wz) / TRIG_MAX_RATIO, m.y - (r - 2) * cos_lookup(wz) / TRIG_MAX_RATIO, 3, F_ROT);
+  k_text(ctx, "NOCH", s_wf15, GRect(m.x - 30, m.y - 12 - 15, 60, 20), GTextAlignmentCenter, F_GELB);
+  f_rest(b, sizeof b, rest_ms);
+  const GFont f = k_breite(b, s_wf26) <= 72 ? s_wf26 : s_wf18;
+  k_text(ctx, b, f, GRect(m.x - 40, m.y + 15 - (f == s_wf26 ? 26 : 18), 80, 32), GTextAlignmentCenter, GColorWhite);
+}
+
+// Frontal von unten: Backen flattern, Hände voraus, eine gelangweilte Taube sitzt auf dem Höhenband
+static void f_frontal(GContext *ctx, int32_t t, int32_t rest_ms) {
+  const int cx = 66, cy = 104 + w_sin(2, w_winkel(t, 73010));
+  f_hg(ctx, F_HIMMEL);
+  for (int i = 0; i < 28; i++) {
+    const int32_t w = i * TRIG_MAX_ANGLE / 28, r0 = 50 + (i * 37 + t / 10 * 22 / 100) % 90, c = cos_lookup(w), s = sin_lookup(w);
+    f_linie(ctx, cx + r0 * c / TRIG_MAX_RATIO, cy + r0 * s / TRIG_MAX_RATIO, cx + (r0 + 26) * c / TRIG_MAX_RATIO, cy + (r0 + 26) * s / TRIG_MAX_RATIO, 1, F_HIMMEL_L);
+  }
+  for (int g = -1; g <= 1; g += 2) {          // Backen: die Welle läuft nach außen
+    GPoint p[9];
+    p[0] = GPoint(cx + g * 18, cy + 26);
+    for (int k = 0; k < 7; k++)
+      p[1 + k] = GPoint(cx + g * (40 + w_sin(5, RAD(1.9) * k - w_winkel(t, 229460))), cy + 22 - 4 * k + w_sin(2, w_winkel(t, 229460) + RAD(1) * k));
+    p[8] = GPoint(cx + g * 26, cy - 2);
+    w_poly(ctx, p, 9, W_HAUT, GColorBlack);
+  }
+  f_bild(ctx, FB_GESICHT, cx, cy, 0);
+  static const int16_t HAND[2][3] = { { 22, 186, 24 }, { 104, 200, 22 } };
+  for (int k = 0; k < 2; k++) {
+    const int hx = HAND[k][0], hy = HAND[k][1] + w_sin(2, w_winkel(t, 93870) + hx * 200), hr = HAND[k][2];
+    f_kapsel(ctx, 66 + (hx - 66) * 3 / 10, 140, hx, hy, 17, F_ORANGE);
+    w_kreis(ctx, GPoint(hx, hy), hr, F_LEDER, GColorBlack);
+    for (int i = 0; i < 4; i++) {
+      const int fx = hx - hr * 6 / 10 + i * hr * 4 / 10;
+      f_linie(ctx, fx, hy - hr * 9 / 10, fx, hy - hr * 3 / 10, 1, F_LEDER_D);
+    }
+  }
+  f_band(ctx, rest_ms, 0);
+  f_bild(ctx, FB_TAUBE, 170, 88, 0);
+  if ((t / 500) % 4 == 0) k_text(ctx, "...", s_wf15, GRect(146, 72 - 15, 30, 20), GTextAlignmentLeft, W_NAVY);
+}
+
+// Anflug: senkrechte Übersicht, zoomt auf das Becken zu (z in Promille)
+#define FT(x, y) GPoint(66 + ((x) - 104) * z / 1000, 200 + ((y) - 200) * z / 1000)
+static void f_anflug(GContext *ctx, int32_t t, int32_t rest_ms, int z) {
+  char b[16];
+  f_hg(ctx, F_HIMMEL);
+  static const int16_t W3[3][3] = { { 30, 60, 800 }, { 170, 130, 700 }, { 90, 200, 900 } };
+  for (int i = 0; i < 3; i++) f_wolke(ctx, W3[i][0], (int)((W3[i][1] + 26000 - t / 10 * 7 / 100 % 260) % 260) - 30, W3[i][2]);
+  const int yh = FT(0, 150).y;
+  fuellen(ctx, GRect(0, yh, BREITE, HOEHE - yh), F_RASEN);
+  f_ell(ctx, FT(30, 152).x, FT(30, 152).y, 60 * z / 1000, 8 * z / 1000, GColorFromHEX(0xAAFF55), GColorClear, 0);
+  f_ell(ctx, FT(170, 154).x, FT(170, 154).y, 50 * z / 1000, 7 * z / 1000, GColorFromHEX(0xAAFF55), GColorClear, 0);
+  fuellen(ctx, GRect(0, yh, BREITE, 8 * z / 1000), F_RASEN);
+  GPoint haus[4] = { FT(8, 168), FT(52, 168), FT(52, 196), FT(8, 196) };
+  w_poly(ctx, haus, 4, GColorFromHEX(0xFFFFAA), GColorBlack);
+  GPoint dach[3] = { FT(2, 170), FT(30, 150), FT(58, 170) };
+  w_poly(ctx, dach, 3, GColorFromHEX(0xAA0000), GColorBlack);
+  GPoint fe[4] = { FT(18, 178), FT(30, 178), FT(30, 188), FT(18, 188) };
+  w_poly(ctx, fe, 4, F_HIMMEL_L, GColorBlack);
+  GPoint tuer[4] = { FT(36, 180), FT(46, 180), FT(46, 196), FT(36, 196) };
+  w_poly(ctx, tuer, 4, F_LEDER, GColorBlack);
+  for (int x = 150; x < 230; x += 12) w_kreis(ctx, FT(x, 168), 8 * z / 1000, F_RASEN_D, GColorBlack);
+  f_ell(ctx, 66, 200, 60 * z / 1000, 20 * z / 1000, GColorClear, GColorWhite, 2);
+  f_ell(ctx, 66, 200, 44 * z / 1000, 14 * z / 1000, GColorClear, GColorWhite, 2);
+  f_becken(ctx, 66, 198, 26 * z / 1000, 8 * z / 1000, 7 * z / 1000, true, true);
+  w_kreis(ctx, FT(112, 196), 1 + 2 * z / 1000, F_GELB, F_GELB);
+  f_bild(ctx, FB_KLEIN, 66 + w_sin(3, w_winkel(t, 20860)), 40, 0);
+  f_band(ctx, rest_ms, 0);
+  snprintf(b, sizeof b, "ZOOM x%d", (12 * z + 500) / 1000);
+  k_text(ctx, b, s_wf15, GRect(6, 22 - 15, 100, 20), GTextAlignmentLeft, W_NAVY);
+}
+#undef FT
+
+// Schirm: t = ms seit dem Ziehen. Greift zum Griff, Hilfsschirm, Kappe streckt sich, öffnet mit Ruck, hängt.
+// Danach kommt der Boden mit dem Becken langsam von unten (ab = Restzeit beim Ziehen)
+static void f_schirm(GContext *ctx, int32_t t, int32_t rest_ms, int32_t ab) {
+  GPoint rand[9], s0, s1;
+  f_hg(ctx, F_HIMMEL);
+  const int tempo = t < 1500 ? 300 : 300 - 240 * f_weich(t, 1500, 2300) / 1000;
+  f_linien(ctx, t < 1500 ? t : 1500 + (t - 1500) * tempo / 300, 21, t < 1600 ? 20 : 10, 300, false, GColorWhite, 140);
+  if (t > 3600 && ab > 3000) {                // Boden kommt näher
+    const int gy = 240 - 50 * f_ein(ab - rest_ms, (ab - 3000) / 3, ab - 3000) / 1000;
+    if (gy < HOEHE) {
+      fuellen(ctx, GRect(0, gy, BREITE, HOEHE - gy), F_RASEN);
+      for (int x = -4; x < 150; x += 14) w_kreis(ctx, GPoint(x, gy), 7, F_RASEN_D, GColorBlack);
+      f_becken(ctx, 64, gy + 18, 34, 7, 8, true, true);
+    }
+  }
+  const int kx0 = 64, ky0 = 66;
+  if (t < 1000) {                             // Freifall kopfüber, greift zum Griff; Hilfsschirm schießt hoch
+    const int32_t a = A_PI + RAD(0.1);
+    f_bild(ctx, t < 500 ? FB_FLUG : FB_ZIEH, kx0, 96, a);
+    if (t >= 700) {
+      const GPoint p = f_dreh(kx0, 96, a, -10, -12, 1150);
+      const int hy = p.y - 10 - 100 * f_weich(t, 700, 1000) / 1000;
+      f_linie(ctx, p.x, p.y, p.x + 6, hy, 1, F_GRAU_D);
+      f_kappe(ctx, p.x + 6, hy, 14, 10, 1000, rand);
+      k_text(ctx, "PLOPP!", s_wf15, GRect(p.x - 70, hy - 2 - 15, 60, 20), GTextAlignmentLeft, W_NAVY);
+    }
+  } else {
+    int32_t a = A_PI + RAD(0.1) + (A_PI - RAD(0.1) + RAD(0.12)) * f_weich(t, 1000, 1600) / 1000;
+    const int ruck = t > 1450 && t < 2100 ? w_sin(14, (t - 1450) * A_PI / 650) : 0;
+    const int cy = 96 + 78 * f_weich(t, 1000, 1800) / 1000 + ruck;
+    const int32_t sway = t > 2000 ? w_sin(RAD(0.07), w_winkel(t - 2000, 25032)) : 0;
+    a += sway;
+    int32_t auf = f_weich(t, 1350, 1700);
+    if (t > 1700) auf = 1000 + w_sin(120, f_ein(t, 1700, 2100) * A_PI / 1000);
+    const int kky = ky0 - 60 * (1000 - f_weich(t, 1000, 1500)) / 1000, kkx = kx0 - 30 * sway / RAD(1);
+    f_schultern(kx0, cy, a, &s0, &s1);
+    f_kappe(ctx, kkx, kky, 60, 50, auf, rand);
+    f_leinen(ctx, rand, kkx, kky, s0, s1);
+    f_bild(ctx, t > 1600 ? FB_HAENG : FB_ZIEH, kx0, cy, a);
+    if (t > 1450 && t < 2200) f_text_rand(ctx, "RUMMS!", s_wf18, GRect(4, 222 - 18, 120, 24), F_ROT, GColorWhite);
+  }
+  f_band(ctx, rest_ms, 0);
+}
+
+// Ende: t = ms ab 3 s vor Ablauf. Hängt und winkt, wirft die Kappe ab, dreht kopfüber, taucht bei 3000 ein: Platsch
+static void f_ende(GContext *ctx, int32_t t) {
+  GPoint rand[9], s0, s1;
+  f_hg(ctx, F_HIMMEL);
+  f_linien(ctx, t, 13, t > 900 ? 14 : 6, t < 900 ? 120 : 320, false, GColorWhite, 140);
+  fuellen(ctx, GRect(0, 176, BREITE, HOEHE - 176), F_RASEN);
+  for (int x = -4; x < 210; x += 14) w_kreis(ctx, GPoint(x, 176), 7, F_RASEN_D, GColorBlack);
+  if (t < 3000) {
+    f_becken(ctx, 64, 204, 58, 12, 14, true, true);
+    const int ex = 100 + 22 * f_weich(t, 2000, 2900) / 1000;   // Ente paddelt panisch weg
+    f_bild(ctx, FB_ENTE, ex, 203 + w_sin(1, w_winkel(t, 83440)), 0);
+    if (t > 1600) k_text(ctx, "!!", s_wf15, GRect(ex + 10, 186 - 15, 20, 20), GTextAlignmentLeft, F_ROT);
+    if (t < 900) {
+      const int32_t sway = w_sin(RAD(0.08), w_winkel(t, 31290)), u = f_weich(t, 550, 900);
+      const int kx = 92 + 160 * u / 1000 * u / 1000, ky = 8 - 120 * u / 1000 * u / 1000;
+      f_kappe(ctx, kx, ky, 44, 34, 1000, rand);
+      if (u == 0) { f_schultern(84, 80, sway, &s0, &s1); f_leinen(ctx, rand, kx, ky, s0, s1); }
+      else for (int i = 0; i < 9; i++) f_linie(ctx, rand[i].x, rand[i].y, kx - 6, ky + 36, 1, F_GRAU_D);
+      f_bild(ctx, t > 550 ? FB_WINK : FB_HAENG, 84, 80, sway);
+      if (t > 550) k_text(ctx, "TSCHÜSS!", s_wf15, GRect(6, 40 - 15, 90, 20), GTextAlignmentLeft, W_NAVY);
+    } else {
+      const int32_t u = f_weich(t, 900, 1500), f = f_ein(t, 900, 3000);
+      f_bild(ctx, FB_FLUG, 84 - 20 * u / 1000, 80 + 72 * f / 1000 * f / 1000, A_PI * u / 1000);
+    }
+    f_band(ctx, 3000 - t, 0);
+    return;
+  }
+  const int32_t u = t - 3000;                 // Platsch
+  f_becken(ctx, 64, 204, 58, 12, 14, true, false);
+  const int hoehe = w_sin(70, f_ein(u, 0, 1100) * A_PI / 1000);
+  for (int i = 0; i <= 10; i++) {
+    const int x = 22 + i * 84 / 10, h = hoehe * (550 + 450 * sin_lookup(i * A_PI / 10) / TRIG_MAX_RATIO) / 1000;
+    GPoint p[4] = { GPoint(x - 8, 206), GPoint(x - 2, 206 - h), GPoint(x + 2, 206 - h - 6), GPoint(x + 8, 206) };
+    w_poly(ctx, p, 4, W_WASSER, W_WASSER_D);
+  }
+  for (int i = 0; i < 14; i++) {
+    const uint32_t z = f_zufall(500 + i);
+    const int vx = (int)(z % 220) - 110, vy = -150 - (int)((z >> 8) % 110);
+    const int x = 64 + vx * 7 / 10 * u / 1000, y = 198 + vy * u / 1000 + 300 * (u / 10) * (u / 10) / 10000;
+    if (y < 210) w_kreis(ctx, GPoint(x, y), 3 + (z >> 16) % 2, W_WASSER, W_WASSER_D);
+  }
+  for (int k = 0; k < 2; k++) {               // Stiefel ragen raus und zappeln
+    const int x = k ? 71 : 57, dx = w_sin(14, (k ? RAD(0.2) : -RAD(0.15)) + (k ? -1 : 1) * w_sin(RAD(0.25), w_winkel(u, 146020)));
+    f_kapsel(ctx, x, 208, x + dx, 182, 7, F_ORANGE);
+    GPoint p[4] = { GPoint(x + dx - 5, 184), GPoint(x + dx + 5, 184), GPoint(x + dx + 6, 172), GPoint(x + dx - 9, 174) };
+    w_poly(ctx, p, 4, GColorBlack, GColorBlack);
+  }
+  f_becken(ctx, 64, 204, 58, 12, 14, false, true);
+  f_bild(ctx, FB_ENTE, 100 + 40 * u / 1000, 202 - 230 * u / 1000 + 160 * (u / 10) * (u / 10) / 10000, 0);
+  if (u > 50) f_text_rand(ctx, "PLATSCH!", s_wf18, GRect(4, 60 - 18, 120, 24), W_WASSER_D, GColorWhite);
+  f_band(ctx, 0, 0);
+}
+
+static void f_pause(GContext *ctx, int32_t rest_ms) {
+  f_hg(ctx, F_HIMMEL);
+  f_wolke(ctx, 36, 196, 1200);
+  f_wolke(ctx, 110, 40, 700);
+  f_bild(ctx, FB_UHR, 70, 120, 0);
+  f_bild(ctx, FB_VOGEL_A, 86, 52, 0);
+  k_text(ctx, "Zzz", s_wf15, GRect(36, 30 - 15, 40, 20), GTextAlignmentLeft, W_NAVY);
+  f_band(ctx, rest_ms, 0);
+  w_pille(ctx, 124, 142, 72, 19, F_GELB);
+  k_text(ctx, "PAUSE", s_wf15, GRect(124, 156 - 15, 72, 20), GTextAlignmentCenter, W_NAVY);
+  w_schild(ctx, "Weiter");
+}
+
+// Phasen: Absprung höchstens 3,6 s (kurze Timer: die halbe Zeit ohne die letzten 3 s), Schirm 45 % vor Ende
+static int32_t f_absprung(int32_t ges) { const int32_t v = (ges - 3000) / 2; return v < 0 ? 0 : v > 3600 ? 3600 : v; }
+static int32_t f_schirm_ab(int32_t ges) { const int32_t v = (ges - 3000) * 45 / 100 + 3000; return v < 5500 ? 5500 : v > 60000 ? 60000 : v; }
+static int32_t f_rest_ms(const Timer *t) {
+  time_t s;
+  uint16_t ms;
+  time_ms(&s, &ms);
+  const int32_t r = t->z == Z_LAEUFT ? (int32_t)(t->ende - s) * 1000 - ms : t->z == Z_UM ? 0 : t->rest * 1000;
+  return r < 0 ? 0 : r;
+}
+static void f_timer(GContext *ctx, time_t now) {
+  const Timer *t = &s_t[s_akt];
+  time_t s;
+  uint16_t ms;
+  time_ms(&s, &ms);
+  const int32_t rest = f_rest_ms(t), ges = t->gesamt > 0 ? t->gesamt * 1000 : 1000, flug = ges - rest;
+  const int32_t uhr = (int32_t)(s % 86400) * 1000 + ms, abs_ = f_absprung(ges), ab = f_schirm_ab(ges);
+  int sz;
+  int32_t st = 0;
+  if (t->z == Z_BEREIT) sz = FS_FLUGZEUG, st = -1;
+  else if (t->z == Z_PAUSE) sz = FS_PAUSE;
+  else if (t->z == Z_UM) { const int32_t tau = w_ms_seit(t->ende); sz = FS_ENDE; st = 3000 + (tau < 0 ? 0 : tau > 1300 ? 1300 : tau); }
+  else if (rest <= 3000) sz = FS_ENDE, st = 3000 - rest;
+  else if (flug < abs_) sz = FS_FLUGZEUG, st = flug;
+  else if (rest <= ab) sz = FS_SCHIRM, st = ab - rest;
+  else {
+    const int32_t ff = flug - abs_;
+    if (now - s_taste >= 30) sz = FS_POV, st = ff / 10000 * 10000;   // ohne Taste: nur der Blick nach unten
+    else {
+      static const uint8_t FOLGE[4] = { FS_SEITE, FS_POV, FS_FRONTAL, FS_ANFLUG };
+      sz = FOLGE[ff / 5000 % (rest <= 600000 ? 4 : 3)];
+      st = ff;
+    }
+  }
+  if (sz != s_fszene) { f_frei(); s_fszene = sz; }
+  switch (sz) {
+    case FS_FLUGZEUG: f_flugzeug(ctx, uhr, st, rest); break;
+    case FS_SEITE: f_seite(ctx, st, rest); break;
+    case FS_POV: f_pov(ctx, st, rest, flug * 1000 / ges); break;
+    case FS_FRONTAL: f_frontal(ctx, st, rest); break;
+    case FS_ANFLUG: f_anflug(ctx, st, rest, 1000 + 600 * (600000 - (rest > 600000 ? 600000 : rest)) / 600000); break;
+    case FS_SCHIRM: f_schirm(ctx, st, rest, ab); break;
+    case FS_ENDE: f_ende(ctx, st); break;
+    default: f_pause(ctx, rest); break;
+  }
+}
+// Flüssig (100 ms) zusätzlich zu Water: Absprung, Schirm öffnen, Game Boy am Anfang
+static bool f_anim_noetig(const Timer *t, time_t now) {
+  if (t->z == Z_UM) return now - t->ende < 4;
+  if (t->z != Z_LAEUFT) return false;
+  const int32_t ges = t->gesamt * 1000, rest = f_rest_ms(t), ab = f_schirm_ab(ges);
+  return ges - rest < f_absprung(ges) + 500 || (rest <= ab && rest > ab - 4000);
+}
+
+// Zeit um, Game Boy: COURSE CLEAR tippt sich ein, drei Sterne, er sitzt grinsend im Becken, alle 10 s eine Ente mehr
+#define GB0 GColorFromHEX(0xAAAA55)
+#define GB1 GColorFromHEX(0xAAAA00)
+#define GB2 GColorFromHEX(0x555500)
+#define GB3 GColorFromHEX(0x005500)
+static const int8_t F_ENTEN[10][2] = { { 28, 58 }, { 70, 58 }, { 36, 62 }, { 62, 63 }, { 24, 64 }, { 76, 64 }, { 48, 66 }, { 56, 57 }, { 31, 55 }, { 68, 55 } };
+static void f_level(GContext *ctx, time_t now) {
+  const int i = offener_timer();
+  const int32_t tau = w_ms_seit(s_t[i].ende), ueber = (int32_t)(now - s_t[i].ende);
+  char u[16], d[12];
+  graphics_context_set_antialiased(ctx, false);
+  f_hg(ctx, GB0);
+  graphics_context_set_stroke_color(ctx, GB3);
+  graphics_context_set_stroke_width(ctx, 1);
+  for (int k = 0; k < 2; k++) graphics_draw_rect(ctx, GRect(4 + k, 4 + k, 192 - 2 * k, 220 - 2 * k));
+  graphics_context_set_stroke_color(ctx, GB2);
+  graphics_draw_rect(ctx, GRect(8, 8, 184, 212));
+  static const char TXT[] = "COURSE CLEAR";
+  const int n = tau < 0 ? 0 : tau / 60 > 12 ? 12 : tau / 60, x0 = (BREITE - P_W(TXT, 3) - 6) / 2;
+  char teil[14];
+  memcpy(teil, TXT, n);
+  teil[n] = '\0';
+  p_text(ctx, F35, F35_N, F35_H, teil, x0, 20, 3, GB3);
+  if (n == 12) { fuellen(ctx, GRect(x0 + P_W(TXT, 3) + 3, 20, 3, 9), GB3); fuellen(ctx, GRect(x0 + P_W(TXT, 3) + 3, 32, 3, 3), GB3); }
+  for (int k = 0; k < 3; k++) {               // Sterne nacheinander
+    if (tau < 900 + k * 300) continue;
+    const int sx = 60 + 40 * k, sy = 52 - (tau < 1050 + k * 300 ? 4 : 0);
+    GPoint p[10];
+    for (int j = 0; j < 10; j++) {
+      const int32_t w = j * TRIG_MAX_ANGLE / 10, r = j % 2 ? 6 : 13;
+      p[j] = GPoint(sx + r * sin_lookup(w) / TRIG_MAX_RATIO, sy - r * cos_lookup(w) / TRIG_MAX_RATIO);
+    }
+    w_poly(ctx, p, 10, GB3, GB3);
+  }
+  f_ell(ctx, 100, 118, 64, 14, GB1, GB3, 1);  // Becken
+  fuellen(ctx, GRect(36, 118, 129, 22), GB1);
+  f_ell(ctx, 100, 140, 64, 14, GB0, GB3, 1);
+  for (int x = 44; x < 160; x += 16) fuellen(ctx, GRect(x, 132, 7, 16), GB2);
+  f_linie(ctx, 36, 118, 36, 140, 1, GB3);
+  f_linie(ctx, 164, 118, 164, 140, 1, GB3);
+  f_ell(ctx, 100, 118, 60, 12, GB1, GB2, 1);
+  const int wipp = (tau / 250) % 2 * 2;       // er sitzt im Becken, grinst, hält eine Ente hoch
+  fuellen(ctx, GRect(88, 100, 25, 20), GB2);
+  w_kreis(ctx, GPoint(100, 88), 16, GB0, GB3);
+  graphics_context_set_fill_color(ctx, GB3);
+  graphics_fill_radial(ctx, GRect(84, 72, 33, 33), GOvalScaleModeFitCircle, 16, DEG_TO_TRIGANGLE(270), TRIG_MAX_ANGLE);
+  graphics_fill_radial(ctx, GRect(84, 72, 33, 33), GOvalScaleModeFitCircle, 16, 0, DEG_TO_TRIGANGLE(90));
+  fuellen(ctx, GRect(86, 78, 29, 4), GB2);
+  w_kreis(ctx, GPoint(94, 80), 4, GB0, GB3);
+  w_kreis(ctx, GPoint(106, 80), 4, GB0, GB3);
+  graphics_context_set_stroke_color(ctx, GB3);
+  graphics_context_set_stroke_width(ctx, 3);
+  graphics_draw_arc(ctx, GRect(90, 82, 21, 16), GOvalScaleModeFitCircle, DEG_TO_TRIGANGLE(110), DEG_TO_TRIGANGLE(250));
+  f_linie(ctx, 114, 104, 128, 80 - wipp, 3, GB3);
+  f_ell(ctx, 128, 70 - wipp, 8, 6, GB1, GB3, 1);
+  fuellen(ctx, GRect(136, 68 - wipp, 5, 3), GB3);
+  const int ne = 3 + ueber / 10 > 10 ? 10 : 3 + ueber / 10;
+  for (int k = 0; k < ne; k++) {
+    const int ex = F_ENTEN[k][0] * 2, ey = F_ENTEN[k][1] * 2 + ((tau / 333 + k) % 2) * 2;
+    f_ell(ctx, ex, ey, 8, 4, GB0, GB3, 1);
+    w_kreis(ctx, GPoint(ex + 6, ey - 8), 4, GB0, GB3);
+    fuellen(ctx, GRect(ex + 6, ey - 9, 2, 2), GB3);
+    fuellen(ctx, GRect(ex + 11, ey - 9, 4, 2), GB3);
+  }
+  if (s_blink) {
+    dauer_text(d, sizeof d, ueber < 0 ? 0 : ueber);
+    snprintf(u, sizeof u, "+%s", d);
+    int sc = 5;
+    while (sc > 2 && P_GW(u, sc) > 176) sc--;
+    P_GROSS(u, (BREITE - P_GW(u, sc)) / 2, 160, sc, GB3);
+  }
+  p_text(ctx, F35, F35_N, F35_H, "TASTE: AUS", (BREITE - P_W("TASTE: AUS", 2)) / 2, 204, 2, GB2);
+  graphics_context_set_antialiased(ctx, true);
+}
+// Zeit um: erst den Platsch zeigen (1,3 s), dann den Game Boy über alles
+static void f_um(GContext *ctx, time_t now) {
+  const int i = offener_timer();
+  const int32_t tau = w_ms_seit(s_t[i].ende);
+  if (s_modus == M_TIMER && s_akt == i && tau >= 0 && tau < 1300) return;
+  if (s_fszene >= 0) f_frei();
+  f_level(ctx, now);
+}
+
 static void zeichnen(Layer *layer, GContext *ctx) {
   const time_t now = time(NULL);
   if (WATER) graphics_context_set_antialiased(ctx, true);
+  if (s_fszene >= 0 && !(FALL && s_modus == M_TIMER)) f_frei();   // Bilder nur in der Timer-Ansicht im Speicher
   switch (s_modus) {
     case M_EIN: if (WATER) w_eingabe(ctx, now); else eingabe(ctx, now); break;
-    case M_TIMER: if (WATER) w_timer(ctx, now); else timer_ansicht(ctx, now); break;
+    case M_TIMER: if (FALL) f_timer(ctx, now); else if (WATER) w_timer(ctx, now); else timer_ansicht(ctx, now); break;
     case M_STOPP: if (WATER) w_stopp(ctx, now); else stopp_ansicht(ctx, now); break;
     case M_ANPASSEN: if (WATER) w_anpassen(ctx, now); else anpassen_ansicht(ctx, now); break;
     case M_FRAGE: frage_ansicht(ctx); break;
     default: liste(ctx); break;
   }
-  if (offener_timer() >= 0) { if (WATER) w_gameboy(ctx, now); else klingel_kasten(ctx, now); }
+  if (offener_timer() >= 0) { if (FALL) f_um(ctx, now); else if (WATER) w_gameboy(ctx, now); else klingel_kasten(ctx, now); }
   else if (s_hinweis[0]) hinweis_kasten(ctx);
 }
 
@@ -1354,9 +2004,11 @@ static void schnell_neu(void) { if (!s_schnell_timer) schnell_cb(NULL); }
 // Water: flüssig (100 ms) nur 30 s nach einer Taste oder dem Öffnen, in den letzten 10 s und beim Eintauchen,
 // sonst im Sekundentakt (Akku)
 static bool w_anim_noetig(void) {
+  const time_t now = time(NULL);
+  if (FALL && offener_timer() >= 0) return now - s_t[offener_timer()].ende < 4;
   if (!WATER || s_modus != M_TIMER) return false;
   const Timer *t = &s_t[s_akt];
-  const time_t now = time(NULL);
+  if (FALL && f_anim_noetig(t, now)) return true;
   if (t->z == Z_UM) return now - t->ende < 2;
   if (t->z == Z_LAEUFT && t->ende - now <= 10) return true;
   return (t->z == Z_BEREIT || t->z == Z_LAEUFT) && now - s_taste < 30;
@@ -1768,7 +2420,7 @@ static void menue_zeigen(int sel_aktion) {
 static void einst_zeigen(int sel_aktion) {
   char b[40];
   liste_beginnen(LI_EINST, T("EINSTELLUNGEN", "Einstellungen"));
-  eintrag(WATER ? "Ansicht: Water >" : T("ANSICHT: PHOSPHOR >", "Ansicht: Papier >"), A_ANSICHT, 0);
+  eintrag(FALL ? "Ansicht: Fallschirm >" : WATER ? "Ansicht: Water >" : T("ANSICHT: PHOSPHOR >", "Ansicht: Papier >"), A_ANSICHT, 0);
   if (!WATER)                                 // Water: eigene Farben, Invertiert gilt dort nicht
     eintrag(s_invers ? T("INVERTIERT: AN", "Invertiert: an") : T("INVERTIERT: AUS", "Invertiert: aus"), A_INVERS, 0);
   if (s_layout == L_PHOSPHOR)                 // Papier und Water haben ohnehin kein Grau
@@ -1797,13 +2449,15 @@ static void einst_zeigen(int sel_aktion) {
 }
 static void ansicht_zeigen(void) {
   liste_beginnen(LI_ANSICHT, T("ANSICHT", "Ansicht"));
+  eintrag(T("FALLSCHIRM", "Fallschirm"), A_SET_ANSICHT, L_FALL);
+  info(T("STANDARD: DOPPELDECKER,", "Standard: Doppeldecker,"), T("ABSPRUNG, PLANSCHBECKEN", "Absprung, Planschbecken"));
   eintrag(T("WATER", "Water"), A_SET_ANSICHT, L_WATER);
-  info(T("STANDARD: SPRINGER,", "Standard: Springer,"), T("PUNKTRICHTER, PLANSCHBECKEN", "Punktrichter, Planschbecken"));
+  info(T("SPRINGER, PUNKTRICHTER,", "Springer, Punktrichter,"), T("PLANSCHBECKEN", "Planschbecken"));
   eintrag(T("PAPIER", "Papier"), A_SET_ANSICHT, L_PAPIER);
   info(T("SYSTEMSCHRIFT FETT,", "Systemschrift fett,"), T("SCHWARZ AUF WEISS", "schwarz auf weiß"));
   eintrag(T("PHOSPHOR", "Phosphor"), A_SET_ANSICHT, L_PHOSPHOR);
   info(T("PIXELSCHRIFT,", "Pixelschrift,"), T("WEISS AUF SCHWARZ", "weiß auf Schwarz"));
-  liste_fertig(WATER ? 0 : PAPIER ? 1 : 2);
+  liste_fertig(FALL ? 0 : s_layout == L_WATER ? 1 : PAPIER ? 2 : 3);
 }
 static void ton_zeigen(void) {
   liste_beginnen(LI_TON, T("TON", "Ton"));
@@ -2262,9 +2916,9 @@ static void init(void) {
     for (uint32_t k = 1; k < 260; k++) persist_delete(k);
     persist_write_int(PK_FORMAT, FORMAT);
   }
-  s_layout = lesen(PK_LAYOUT, L_WATER);
+  s_layout = lesen(PK_LAYOUT, L_FALL);
   if (s_layout == 1) s_layout = L_PAPIER;    // Klar (bis 0.6) → Papier
-  else if (s_layout != L_PHOSPHOR && s_layout != L_PAPIER) s_layout = L_WATER;
+  else if (s_layout != L_PHOSPHOR && s_layout != L_PAPIER && s_layout != L_WATER) s_layout = L_FALL;
   s_invers = lesen(PK_INVERS, 0) ? true : false;
   s_kontrast = lesen(PK_KONTRAST, 0) ? true : false;
   schriften_setzen();
@@ -2323,6 +2977,7 @@ static void deinit(void) {
   if (s_hinweis_timer) app_timer_cancel(s_hinweis_timer);
   if (s_anim_timer) app_timer_cancel(s_anim_timer);
   signal_aus();
+  f_frei();
   speichern();
   wecker_stellen();
   window_destroy(s_win);
